@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% macro problem_level(problems) -%}
+  {%- if problems|selectattr("severity", "equalto", "fatal")|list|length > 0 -%}fatal
+  {%- elif problems|length > 0 -%}error
+  {%- else -%}ok
+  {%- endif -%}
+{%- endmacro %}
+{% block body %}
+{% for hsm in hsms %}
+<section class="card">
+  <div class="title-row">
+    <h2><a href="{{ url_for('web.hsm_detail', name=hsm.name) }}">{{ hsm.name }}</a></h2>
+    <div class="actions">
+      <span class="level level-{{ problem_level(hsm.problems) }}">problems: {{ hsm.problems|length }}</span>
+      <span class="state {{ 'good' if hsm.thread_status == 'running' else 'bad' }}">{{ hsm.thread_status }}</span>
+    </div>
+  </div>
+  <dl>
+    <dt>Serial</dt><dd>{{ hsm.id or '-' }}</dd>
+    <dt>Last checked</dt><dd>{{ hsm.last_checked_display }}</dd>
+  </dl>
+  <div class="actions">
+    <form method="post" action="{{ url_for('web.check_now', name=hsm.name) }}"><button type="submit">check now</button></form>
+    {% if hsm.thread_status == 'running' %}
+    <form method="post" action="{{ url_for('web.stop_poller', name=hsm.name) }}"><button type="submit">stop</button></form>
+    {% else %}
+    <form method="post" action="{{ url_for('web.start_poller', name=hsm.name) }}"><button type="submit">start</button></form>
+    {% endif %}
+  </div>
+</section>
+{% else %}<section class="card"><p>No HSMs configured.</p></section>{% endfor %}
+{% endblock %}

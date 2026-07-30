@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% macro role_state(value) -%}
+  {%- if value is none -%}?{%- elif value -%}activated{%- else -%}deactivated{%- endif -%}
+{%- endmacro %}
+{% macro severity_class(severity) -%}
+  {%- if severity == 'fatal' -%}level-fatal{%- else -%}level-error{%- endif -%}
+{%- endmacro %}
+{% block body %}
+<p><a href="{{ url_for('web.index') }}">&larr; all HSMs</a></p>
+
+<section class="card">
+  <div class="title-row">
+    <h2>{{ hsm.name }}</h2>
+    <div class="actions">
+      <button type="button" class="setup-toggle" onclick="toggleSetup('{{ hsm.name }}')">setup</button>
+      <span class="state {{ 'good' if hsm.thread_status == 'running' else 'bad' }}">{{ hsm.thread_status }}</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <form method="post" action="{{ url_for('web.check_now', name=hsm.name) }}"><button type="submit">check now</button></form>
+    {% if hsm.thread_status == 'running' %}
+    <form method="post" action="{{ url_for('web.stop_poller', name=hsm.name) }}"><button type="submit">stop</button></form>
+    {% else %}
+    <form method="post" action="{{ url_for('web.start_poller', name=hsm.name) }}"><button type="submit">start</button></form>
+    {% endif %}
+  </div>
+
+  <form class="setup-form" id="setup-form-{{ hsm.name }}" hidden onsubmit="return submitSetup(event, '{{ hsm.name }}')">
+    <input type="password" name="admin_password" placeholder="appliance admin password" autocomplete="off" required>
+    <button type="submit">provision "{{ monitor_username }}" user</button>
+  </form>
+
+  <dl>
+    <dt>Serial</dt><dd>{{ hsm.id or '-' }}</dd>
+    <dt>Last checked</dt><dd>{{ hsm.last_checked_display }}</dd>
+  </dl>
+
+  {% if hsm.problems %}
+  <h3>Problems ({{ hsm.problems|length }})</h3>
+  <ul class="problems">
+    {% for problem in hsm.problems %}
+    <li class="{{ severity_class(problem.severity) }}">[{{ problem.severity }}] {{ problem.message }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="title-row">
+    <h3>Partitions ({{ hsm.partitions|length }})</h3>
+    <a class="muted" href="{{ url_for('web.suggested_partitions', name=hsm.name) }}" target="_blank">generate partitions.yaml from current state</a>
+  </div>
+  {% for partition in hsm.partitions %}
+  <article class="partition">
+    <div class="partition-head">
+      <strong>{{ partition.label or partition.id }}</strong>
+      <span class="muted">Serial: {{ partition.id }}</span>
+    </div>
+    {% if partition.error %}
+    <pre class="error">{{ partition.error }}</pre>
+    {% else %}
+    <table class="roles">
+      <thead><tr><th>Role</th><th>is</th><th>should</th></tr></thead>
+      <tbody>
+        {% for kind in ["cu", "co"] %}
+        {% set status = partition.role_status[kind] %}
+        {% set mismatch = status.expected is not none and status.actual is not none and status.actual != status.expected %}
+        <tr class="{{ 'mismatch' if mismatch else '' }}">
+          <td>{{ kind|upper }}</td>
+          <td>{{ role_state(status.actual) }}</td>
+          <td>{{ role_state(status.expected) if status.expected is not none else '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+  {% else %}<p>No partitions returned yet.</p>{% endfor %}
+</section>
+
+<section class="card">
+  <h3>Log</h3>
+  <div id="log" class="log"><p class="log-empty">No actions yet.</p></div>
+</section>
+
+<script>
+function toggleSetup(name) {
+  var form = document.getElementById('setup-form-' + name);
+  form.hidden = !form.hidden;
+}
+
+function logLine(text, ok) {
+  var log = document.getElementById('log');
+  var empty = log.querySelector('.log-empty');
+  if (empty) empty.remove();
+  var line = document.createElement('div');
+  line.className = 'log-line ' + (ok ? 'good' : 'bad');
+  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + text;
+  log.prepend(line);
+}
+
+async function submitSetup(event, name) {
+  event.preventDefault();
+  var form = event.target;
+  var button = form.querySelector('button[type=submit]');
+  var password = form.admin_password.value;
+  form.admin_password.value = '';
+
+  var originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'working...';
+
+  try {
+    var response = await fetch('/hsms/' + encodeURIComponent(name) + '/setup', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({admin_password: password}),
+    });
+    var data = await response.json();
+    if (response.ok && data.ok) {
+      logLine(name + ': done - ' + data.steps.join('; '), true);
+      form.hidden = true;
+    } else {
+      logLine(name + ': ' + (data.error || response.statusText), false);
+    }
+  } catch (err) {
+    logLine(name + ': ' + String(err), false);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+  return false;
+}
+</script>
+{% endblock %}

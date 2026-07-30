@@ -1,0 +1,23 @@
+global:
+  timeout: 10
+  api_version: 15
+  verify: false
+
+hsms:
+  - name: hsm03t.test.swsnet.ch
+    verify: false
+
+# Expected CU/CO role state per partition, matched by partition name (Luna calls the
+# actual field "label" - matched case-insensitively). Only "activated"/"deactivated"
+# matters right now; initialized/token-set info is skipped for now.
+partition_templates:
+  - name: secure
+    cu: activated
+    co: deactivated
+  - name: legacy
+    cu: activated
+    co: activated
+
+partitions:
+  - name: dss
+    template: legacy

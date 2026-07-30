@@ -1,0 +1,25 @@
+[project]
+name = "luna-hsm-monitor"
+version = "0.1.0"
+description = "Small live inventory viewer for Thales Luna HSM appliances"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "flask>=3.1,<4",
+  "gunicorn>=23,<24",
+  "pyyaml>=6.0,<7",
+  "requests>=2.32,<3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

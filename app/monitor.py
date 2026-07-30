@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from app.luna.client import LunaClient
+from app.luna.provisioning import RESERVED_USERNAMES
+from app.luna.session import LunaSession
+
+
+def load_config() -> dict[str, Any]:
+    config_path = Path(os.environ.get("LUNA_CONFIG", "/config/hsms.yml"))
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+
+    if not isinstance(config, dict):
+        raise ValueError(f"{config_path} must contain a YAML mapping")
+
+    return config
+
+
+def find_hsm_entry(config: dict[str, Any], name: str) -> dict[str, Any] | None:
+    return next((entry for entry in config.get("hsms", []) if entry["name"] == name), None)
+
+
+def session_kwargs(entry: dict[str, Any], global_config: dict[str, Any]) -> dict[str, Any]:
+    name = entry["name"]
+    return {
+        "base_url": entry.get("url", f"https://{name}:8443"),
+        "verify": entry.get("verify", global_config.get("verify", False)),
+        "timeout": entry.get("timeout", global_config.get("timeout", 10)),
+        "api_version": entry.get("api_version", global_config.get("api_version", 15)),
+    }
+
+
+def suggest_partition_config(config: dict[str, Any], hsm: dict[str, Any]) -> str:
+    """Best-effort `partitions:` config snippet: matches each partition's currently
+    observed CU/CO activation state against the templates already defined in
+    `partition_templates:`. Never invents a new template - a partition that doesn't
+    match any existing one is listed commented-out with its actual state instead,
+    for a human to sort out."""
+    templates = config.get("partition_templates", [])
+
+    lines = ["partitions:"]
+    for partition in hsm.get("partitions", []):
+        label = partition.get("label") or partition.get("id")
+        status = partition.get("role_status", {})
+        cu_actual = status.get("cu", {}).get("actual")
+        co_actual = status.get("co", {}).get("actual")
+
+        match = None
+        if cu_actual is not None and co_actual is not None:
+            for template in templates:
+                if (
+                    (template.get("cu") == "activated") == cu_actual
+                    and (template.get("co") == "activated") == co_actual
+                ):
+                    match = template.get("name")
+                    break
+
+        if match:
+            lines.append(f"  - name: {label}")
+            lines.append(f"    template: {match}")
+        else:
+            lines.append(f"  # no matching template for {label} (cu={cu_actual}, co={co_actual})")
+
+    return "\n".join(lines) + "\n"
+
+
+def role_expectations(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """{partition_name_lower: template} from top-level `partition_templates:` +
+    `partitions:` (name -> template) config sections."""
+    templates = {str(t["name"]).lower(): t for t in config.get("partition_templates", [])}
+
+    expectations: dict[str, dict[str, Any]] = {}
+    for entry in config.get("partitions", []):
+        template = templates.get(str(entry.get("template", "")).lower())
+        if template is not None:
+            expectations[str(entry["name"]).lower()] = template
+
+    return expectations
+
+
+# Matches the nautobot plugin's fetch_hsm_data.py / diffsync/hsmdata.py, which ran
+# successfully against this same appliance under REST API v12: role['id'] is literally
+# "cu"/"co"/"so", and the role detail object (at role['url']) has plain "activated" and
+# "initialized" booleans. No other field-name variants were ever used there.
+def _role_kind(role: dict[str, Any]) -> str | None:
+    role_id = str(role.get("id", "")).lower()
+    return role_id if role_id in ("cu", "co") else None
+
+
+def _is_activated(role: dict[str, Any]) -> bool | None:
+    if "activated" in role:
+        return bool(role["activated"])
+    return None
+
+
+def _partition_role_status(roles: list[dict[str, Any]], template: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    # Keys are "actual"/"expected", not "is"/"should" - Jinja reserves `is` for its own
+    # test-expression syntax, so `status.is` would be a template syntax error.
+    status: dict[str, dict[str, Any]] = {
+        "cu": {"actual": None, "expected": None},
+        "co": {"actual": None, "expected": None},
+    }
+
+    for role in roles:
+        kind = _role_kind(role)
+        if kind is not None:
+            status[kind]["actual"] = _is_activated(role)
+
+    if template:
+        for kind in ("cu", "co"):
+            expected = template.get(kind)
+            if expected is not None:
+                status[kind]["expected"] = expected == "activated"
+
+    return status
+
+
+def _partition_status(client: LunaClient, hsm_id: str, partition: dict[str, Any], role_expectations: dict[str, dict[str, Any]]) -> None:
+    """Mutates `partition` in place, isolating its own failure from the rest of the HSM."""
+    partition["error"] = None
+    partition["roles"] = []
+    partition["role_status"] = _partition_role_status([], None)
+
+    partition_id = partition.get("id")
+    if not partition_id:
+        return
+
+    try:
+        role_stubs = client.list_roles(hsm_id, partition_id)
+        roles = [client.get_role(stub["url"]) for stub in role_stubs if stub.get("url")]
+        partition["roles"] = roles
+
+        label = str(partition.get("label", partition_id))
+        template = role_expectations.get(label.lower())
+        partition["role_status"] = _partition_role_status(roles, template)
+    except Exception as exc:  # noqa: BLE001 - one bad partition must not blank the whole HSM
+        partition["error"] = str(exc)
+
+
+class FatalHsmError(Exception):
+    """The HSM itself is unreachable/unusable this cycle (auth or connection failure) -
+    as opposed to a single partition being broken. Callers should stop polling on this,
+    not just log it and retry next cycle - retrying a struggling appliance's web server
+    every minute forever makes the underlying problem worse, not better."""
+
+
+def _partition_problems(hsm_name: str, partition: dict[str, Any]) -> list[dict[str, Any]]:
+    label = str(partition.get("label", partition.get("id")))
+    problems: list[dict[str, Any]] = []
+
+    if partition["error"]:
+        problems.append(
+            {
+                "severity": "error",
+                "kind": "partition_fetch_error",
+                "message": f"partition {label}: {partition['error']}",
+                "hsm": hsm_name,
+                "partition": label,
+            }
+        )
+
+    for role in ("cu", "co"):
+        status = partition["role_status"][role]
+        if status["expected"] is None or status["actual"] is None:
+            continue
+        if status["actual"] != status["expected"]:
+            expected_word = "activated" if status["expected"] else "deactivated"
+            problems.append(
+                {
+                    "severity": "error",
+                    "kind": "role_mismatch",
+                    "message": f"partition {label} role {role} should be {expected_word}",
+                    "hsm": hsm_name,
+                    "partition": label,
+                    "role": role,
+                }
+            )
+
+    return problems
+
+
+def poll_once(
+    entry: dict[str, Any],
+    global_config: dict[str, Any],
+    role_expectations: dict[str, dict[str, Any]],
+    username: str,
+    password: str,
+) -> dict[str, Any]:
+    """One poll of one HSM. Raises FatalHsmError if the appliance itself couldn't be
+    reached/authenticated to; per-partition problems are returned, not raised."""
+    name = entry["name"]
+
+    if username in RESERVED_USERNAMES:
+        # Never even attempt this login - same "don't touch the built-in accounts"
+        # rule as provisioning, but here to catch e.g. a misconfigured LUNA_USERNAME
+        # before it starts making real login attempts as admin/operator/monitor/audit.
+        raise FatalHsmError(
+            f"LUNA_USERNAME is '{username}', one of the appliance's built-in roles "
+            f"({', '.join(sorted(RESERVED_USERNAMES))}) - refusing to use it for monitoring"
+        )
+
+    try:
+        with LunaSession(username=username, password=password, **session_kwargs(entry, global_config)) as session:
+            client = LunaClient(session)
+            hsm = client.get_hsm()
+            hsm_id = hsm.get("id")
+
+            partitions = client.list_partitions(hsm_id) if hsm_id else []
+            for partition in partitions:
+                _partition_status(client, hsm_id, partition, role_expectations)
+    except Exception as exc:  # noqa: BLE001 - re-raised as a distinguished fatal type
+        raise FatalHsmError(str(exc)) from exc
+
+    problems: list[dict[str, Any]] = []
+    for partition in partitions:
+        problems.extend(_partition_problems(name, partition))
+
+    return {
+        "name": name,
+        # On this appliance "id" IS the serial - there's no separate serial field.
+        "id": hsm_id,
+        "raw": hsm,
+        "partitions": partitions,
+        "problems": problems,
+    }
+
+
+def poll_all(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """One-shot poll of every configured HSM, for CLI use (probe.py) - not used by the
+    web app, which polls continuously via app.poller instead."""
+    username = os.environ["LUNA_USERNAME"]
+    password = os.environ["LUNA_PASSWORD"]
+    global_config = config.get("global", {})
+    expectations = role_expectations(config)
+
+    results = []
+    for entry in config.get("hsms", []):
+        name = entry["name"]
+        try:
+            result = poll_once(entry, global_config, expectations, username, password)
+        except FatalHsmError as exc:
+            result = {
+                "name": name,
+                "id": None,
+                "raw": None,
+                "partitions": [],
+                "problems": [
+                    {
+                        "severity": "fatal",
+                        "kind": "connection_failed",
+                        "message": f"could not connect to the hsm: {exc}",
+                        "hsm": name,
+                    }
+                ],
+            }
+        results.append(result)
+
+    return results
