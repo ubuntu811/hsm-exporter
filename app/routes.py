@@ -154,6 +154,14 @@ def setup_hsm(name: str):
     def log_it(message: str) -> None:
         state.log_event(name, message)
 
+    poller = POLLERS.get(name)
+    # Stop monitoring this HSM while its account is mid-flux (deleted, then a temp
+    # password, then the real one) - otherwise the pollers race the setup flow and
+    # log confusing transient auth/ACL failures for an account that isn't actually
+    # broken, just in the middle of being rebuilt.
+    if poller is not None:
+        poller.stop()
+
     try:
         with LunaSession(username=ADMIN_USERNAME, password=admin_password, on_error=log_it, **kwargs) as session:
             steps = provision_monitor_user(
@@ -173,12 +181,11 @@ def setup_hsm(name: str):
     except ValueError as exc:
         state.log_event(name, f"setup refused: {exc}")
         return jsonify({"ok": False, "error": str(exc)}), 400
-
-    # The monitor account's credentials just (potentially) changed - refresh promptly
-    # instead of waiting out the rest of the poll interval with stale/fatal state.
-    poller = POLLERS.get(name)
-    if poller is not None:
-        poller.check_now()
+    finally:
+        # Resume regardless of outcome - a failed setup must not leave this HSM's
+        # monitoring silently disabled until someone happens to hit "check now".
+        if poller is not None:
+            poller.check_now()
 
     return jsonify({"ok": True, "steps": steps})
 

@@ -143,12 +143,22 @@ def test_acl_readback_failure_is_reported_but_does_not_break_provisioning(mock_l
 
 def test_get_role_acl_reads_the_current_resources_for_that_role():
     session = MagicMock()
+    session.api_version = 15
     session.get.return_value = MagicMock(text="GET:/\n")
 
     acl = get_role_acl(session, "mon")
 
     assert acl == "GET:/\n"
-    session.get.assert_called_once_with("/roles/mon/resources", headers={"Accept": "application/octet-stream"})
+    # Regression guard: omitting Content-Type here 400s with
+    # FRAMEWORK_HEADER_DOES_NOT_MATCH_MEDIA_TYPE_TEMPLATE even though this is a
+    # bodyless GET - confirmed against the real appliance, not just guessed.
+    session.get.assert_called_once_with(
+        "/roles/mon/resources",
+        headers={
+            "Content-Type": "application/vnd.safenetinc.lunasa+octet-stream;version=15",
+            "Accept": "application/octet-stream",
+        },
+    )
 
 
 @pytest.mark.parametrize("username", sorted(RESERVED_USERNAMES))

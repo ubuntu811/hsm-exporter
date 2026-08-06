@@ -62,10 +62,19 @@ def get_role_acl(admin_session: LunaSession, username: str) -> str:
     """Read back the ACL actually stored on the appliance for this role, rather than
     trusting that a successful PUT means it took - the mismatch between "we sent it"
     and "it's actually active" is exactly what's in question when the ACL keeps
-    getting rewritten but the resulting 401s never change."""
+    getting rewritten but the resulting 401s never change.
+
+    Needs the same Content-Type as the PUT to this same endpoint, even though this is
+    a bodyless GET - omitting it (passing only Accept) 400s with
+    FRAMEWORK_HEADER_DOES_NOT_MATCH_MEDIA_TYPE_TEMPLATE. Passing a `headers` dict to
+    LunaSession.request() replaces the session's default headers entirely rather than
+    merging, so both need to be given explicitly here."""
     response = admin_session.get(
         f"/roles/{username}/resources",
-        headers={"Accept": "application/octet-stream"},
+        headers={
+            "Content-Type": f"application/vnd.safenetinc.lunasa+octet-stream;version={admin_session.api_version}",
+            "Accept": "application/octet-stream",
+        },
     )
     return response.text
 
