@@ -37,12 +37,18 @@ _MONITOR_ACL_LINES = [
     "GET:/api/lunasa/cpu",
     "GET:/api/lunasa/disk",
     "GET:/api/lunasa/network",
+    # Copied verbatim from the old nautobot plugin's ACL text as a debugging test -
+    # {clientid} vs {clientName} and the added intermediate resource still 401'd on
+    # .../links, so this rules out casing/wording of the placeholder as the cause.
+    # Includes /certificate and /partitions even though nothing here calls them, to
+    # match the old text exactly rather than guess at which lines actually mattered.
     "GET:/api/lunasa/ntls",
     "GET:/api/lunasa/ntls/clients",
-    # Same "list grants list, not detail" gap as roles above - each client's own `url`
-    # + "/links", and each link's own `url`, need separate grants.
-    "GET:/api/lunasa/ntls/clients/{clientid}/links",
-    "GET:/api/lunasa/ntls/clients/{clientid}/links/{linkid}",
+    "GET:/api/lunasa/ntls/clients/{clientName}",
+    "GET:/api/lunasa/ntls/certificate",
+    "GET:/api/lunasa/ntls/clients/{clientName}/links",
+    "GET:/api/lunasa/ntls/clients/{clientName}/links/{linkid}",
+    "GET:/api/lunasa/ntls/clients/{clientName}/partitions",
     "POST:/auth/session",
     "DELETE:/auth/session",
     # Framework-enforced self-scoped: a non-admin caller can only target their own userid
