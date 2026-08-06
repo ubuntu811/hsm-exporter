@@ -344,6 +344,7 @@ def poll_clients_once(
                     client_failures += 1
                     continue
 
+                client_link_failures = 0
                 for link_stub in links:
                     link_url = link_stub.get("url")
                     if not link_url:
@@ -352,6 +353,7 @@ def poll_clients_once(
                         link = client.get_link(link_url)
                     except Exception:  # noqa: BLE001 - one bad link shouldn't blank the rest
                         link_failures += 1
+                        client_link_failures += 1
                         continue
                     if link.get("type") != "hsm/partition" or not link.get("url"):
                         continue
@@ -359,6 +361,13 @@ def poll_clients_once(
                     partition_id = _partition_id_from_url(link["url"])
                     partition_clients.setdefault(partition_id, []).append(client_id)
                     resolved_count += 1
+
+                if client_link_failures:
+                    # The individual 404/401/etc are already visible via on_error, but
+                    # not what the LIST call itself said existed - if a listed link
+                    # then 404s on its own url, the raw list stubs are what's needed
+                    # to tell "list is stale/wrong" apart from "we mis-built the url".
+                    log(f"client '{client_id}': raw link list was {links!r}")
     except Exception as exc:  # noqa: BLE001 - re-raised as a distinguished fatal type
         raise FatalHsmError(str(exc)) from exc
 

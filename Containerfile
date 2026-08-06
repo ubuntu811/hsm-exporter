@@ -2,6 +2,10 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 ARG APP_UID=1000
 ARG APP_GID=1000
+# Set via --build-arg at `podman build` time (see build.sh) - GitLab's CI_PIPELINE_IID
+# once this runs in a pipeline, "dev" for a local build outside CI.
+ARG BUILD_NUMBER=dev
+ENV BUILD_NUMBER=${BUILD_NUMBER}
 
 RUN groupadd --gid "${APP_GID}" app \
     && useradd \

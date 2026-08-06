@@ -1,6 +1,9 @@
 [project]
 name = "hsm-exporter"
-version = "0.1.0"
+# MAJOR.MINOR only - the build number (currently GitLab's CI_PIPELINE_IID once this
+# runs in a pipeline, "dev" for local podman builds) gets appended at image-build time
+# to make the full version. See build.sh/run.sh and Containerfile's BUILD_NUMBER arg.
+version = "0.3"
 description = "Live inventory + Prometheus exporter for Thales Luna HSM appliances"
 readme = "README.md"
 requires-python = ">=3.13"

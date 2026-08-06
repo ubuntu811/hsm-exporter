@@ -63,6 +63,11 @@ LUNA_CONFIG="$PWD/config/hsms.yml" uv run python probe.py
 ./run.sh
 ```
 
+Image tag/displayed version is `<pyproject.toml version>.<BUILD_NUMBER>` - `version.sh`
+(sourced by both scripts) computes it. `BUILD_NUMBER` is GitLab's `CI_PIPELINE_IID` once
+this runs in a pipeline, `dev` for a local build. Bump the `version` in `pyproject.toml`
+for MAJOR.MINOR releases; the build number moves on its own with every pipeline run.
+
 Open `http://127.0.0.1:8080/`.
 
 Endpoints:

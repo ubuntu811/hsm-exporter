@@ -2,6 +2,9 @@
 set -euo pipefail
 
 . .env
+. version.sh
+
+LOCAL_IMAGE="localhost/${IMAGE}:${FULL_VERSION}"
 
 CONFIG_DIR="${CONFIG_DIR:-$(pwd)/config}"
 
