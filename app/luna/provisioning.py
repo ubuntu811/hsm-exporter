@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from typing import Any
+from typing import Any, Callable
 
 from .session import LunaSession
 
@@ -68,6 +68,7 @@ def provision_monitor_user(
     username: str,
     final_password: str,
     session_kwargs: dict[str, Any],
+    on_step: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Using an already-authenticated admin session, ensure the role+ACL exist, then
     (re)create the monitor user from scratch. The appliance flags any password an admin
@@ -75,7 +76,11 @@ def provision_monitor_user(
     the account changes its own password - so this creates the user with a throwaway
     temp password, logs in AS that user, and has it self-service change its password to
     `final_password`. `session_kwargs` are the base_url/verify/timeout/api_version
-    needed to open that second session against this same appliance."""
+    needed to open that second session against this same appliance.
+
+    `on_step`, if given, is called with each step's message as soon as that step
+    completes - not just at the end. If a later step raises, whatever `on_step` was
+    already called with is not lost the way the returned list would be."""
     if username in RESERVED_USERNAMES:
         raise ValueError(
             f"refusing to provision '{username}' - that's one of the appliance's built-in "
@@ -84,18 +89,23 @@ def provision_monitor_user(
 
     steps: list[str] = []
 
+    def record(message: str) -> None:
+        steps.append(message)
+        if on_step is not None:
+            on_step(message)
+
     roles = admin_session.get_json("/roles").get("roles", [])
     role_exists = any(role.get("id") == username for role in roles)
 
     if role_exists:
-        steps.append(f"role '{username}' already exists")
+        record(f"role '{username}' already exists")
     else:
         admin_session.post(
             "/roles",
             payload=json.dumps({"roleId": username, "fullName": "HSM Monitor Readonly Role"}),
             expected_status_codes=(204,),
         )
-        steps.append(f"created role '{username}'")
+        record(f"created role '{username}'")
 
     admin_session.put(
         f"/roles/{username}/resources",
@@ -106,18 +116,18 @@ def provision_monitor_user(
         },
         expected_status_codes=(202, 204),
     )
-    steps.append(f"applied ACL to role '{username}'")
+    record(f"applied ACL to role '{username}'")
 
     users = admin_session.get_json("/users").get("users", [])
     user_exists = any(user.get("id") == username for user in users)
 
     if user_exists:
         admin_session.delete(f"/users/{username}", expected_status_codes=(204,))
-        steps.append(f"deleted existing user '{username}'")
+        record(f"deleted existing user '{username}'")
 
     temp_password = secrets.token_urlsafe(24)
     admin_session.post("/users", payload=_user_payload(username, temp_password), expected_status_codes=(204,))
-    steps.append(f"created user '{username}' with a temporary password")
+    record(f"created user '{username}' with a temporary password")
 
     with LunaSession(username=username, password=temp_password, **session_kwargs) as self_session:
         self_session.post(
@@ -125,6 +135,6 @@ def provision_monitor_user(
             payload=json.dumps({"currentPassword": temp_password, "password": final_password}),
             expected_status_codes=(204,),
         )
-    steps.append(f"logged in as '{username}' and set its password to the configured LUNA_PASSWORD")
+    record(f"logged in as '{username}' and set its password to the configured LUNA_PASSWORD")
 
     return steps

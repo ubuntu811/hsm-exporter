@@ -113,13 +113,21 @@ class RolesPoller(_IntervalPoller):
         state.update(self.name, {"thread_status": "running"})
 
     def _poll_cycle(self) -> None:
-        result = poll_once(self.entry, self.global_config, self.role_expectations, self.username, self.password)
+        result = poll_once(
+            self.entry,
+            self.global_config,
+            self.role_expectations,
+            self.username,
+            self.password,
+            on_event=lambda msg: state.log_event(self.name, msg),
+        )
         result["role_problems"] = result.pop("problems")
         result["thread_status"] = "running"
         result["last_checked"] = time.time()
         state.update(self.name, result)
 
     def _on_fatal(self, exc: FatalHsmError) -> None:
+        state.log_event(self.name, f"roles check failed fatally, stopping: {exc}")
         state.update(
             self.name,
             {
@@ -164,7 +172,13 @@ class ClientsPoller(_IntervalPoller):
         state.update(self.name, {"clients_thread_status": "running"})
 
     def _poll_cycle(self) -> None:
-        partition_clients = poll_clients_once(self.entry, self.global_config, self.username, self.password)
+        partition_clients = poll_clients_once(
+            self.entry,
+            self.global_config,
+            self.username,
+            self.password,
+            on_event=lambda msg: state.log_event(self.name, msg),
+        )
         state.update(
             self.name,
             {
@@ -176,6 +190,7 @@ class ClientsPoller(_IntervalPoller):
         )
 
     def _on_fatal(self, exc: FatalHsmError) -> None:
+        state.log_event(self.name, f"clients check failed fatally, stopping: {exc}")
         state.update(
             self.name,
             {

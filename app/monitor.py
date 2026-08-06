@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -192,10 +192,15 @@ def poll_once(
     role_expectations: dict[str, dict[str, Any]],
     username: str,
     password: str,
+    on_event: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """One poll of one HSM. Raises FatalHsmError if the appliance itself couldn't be
     reached/authenticated to; per-partition problems are returned, not raised."""
     name = entry["name"]
+
+    def log(message: str) -> None:
+        if on_event is not None:
+            on_event(message)
 
     if username in RESERVED_USERNAMES:
         # Never even attempt this login - same "don't touch the built-in accounts"
@@ -213,6 +218,7 @@ def poll_once(
             hsm_id = hsm.get("id")
 
             partitions = client.list_partitions(hsm_id) if hsm_id else []
+            log(f"found {len(partitions)} partition(s)")
             for partition in partitions:
                 _partition_status(client, hsm_id, partition, role_expectations)
     except Exception as exc:  # noqa: BLE001 - re-raised as a distinguished fatal type
@@ -221,6 +227,8 @@ def poll_once(
     problems: list[dict[str, Any]] = []
     for partition in partitions:
         problems.extend(_partition_problems(name, partition))
+
+    log(f"roles check complete: {len(problems)} problem(s) found")
 
     return {
         "name": name,
@@ -274,17 +282,26 @@ def poll_clients_once(
     global_config: dict[str, Any],
     username: str,
     password: str,
+    on_event: Callable[[str], None] | None = None,
 ) -> dict[str, list[str]]:
     """One poll of one HSM's NTLS client registrations, returning {partition_id:
     [client_names]}. Raises FatalHsmError on connection/auth failure, same contract
     as poll_once(). One bad client or link is skipped, not fatal - mirrors
-    _partition_status()'s "one bad thing doesn't blank the whole result" rule.
+    _partition_status()'s "one bad thing doesn't blank the whole result" rule. Every
+    skip is reported via `on_event` though - a silent empty result (e.g. from the ACL
+    not granting the NTLS endpoints yet) is indistinguishable from "no clients are
+    actually registered" otherwise, which is a real trap: it *looks* successful.
 
     Deliberately does NOT resolve the partition detail (name/label) the way the old
     nautobot plugin did - it already has the full partition list (with ids) from
     poll_once() in the same app, so it only needs the partition *id* out of each
     link, matched against that list at render time. Saves a network call per link
     and avoids depending on an unverified field name on that detail object."""
+
+    def log(message: str) -> None:
+        if on_event is not None:
+            on_event(message)
+
     if username in RESERVED_USERNAMES:
         raise FatalHsmError(
             f"LUNA_USERNAME is '{username}', one of the appliance's built-in roles "
@@ -295,8 +312,13 @@ def poll_clients_once(
         with LunaSession(username=username, password=password, **session_kwargs(entry, global_config)) as session:
             client = LunaClient(session)
             clients = client.list_ntls_clients()
+            log(f"found {len(clients)} registered client(s)")
 
             partition_clients: dict[str, list[str]] = {}
+            resolved_count = 0
+            client_failures = 0
+            link_failures = 0
+
             for stub in clients:
                 client_id = stub.get("clientID")
                 client_url = stub.get("url")
@@ -305,7 +327,9 @@ def poll_clients_once(
 
                 try:
                     links = client.list_client_links(client_url)
-                except Exception:  # noqa: BLE001 - one bad client shouldn't blank the rest
+                except Exception as exc:  # noqa: BLE001 - one bad client shouldn't blank the rest
+                    client_failures += 1
+                    log(f"client '{client_id}': could not list links: {exc}")
                     continue
 
                 for link_stub in links:
@@ -314,14 +338,22 @@ def poll_clients_once(
                         continue
                     try:
                         link = client.get_link(link_url)
-                    except Exception:  # noqa: BLE001 - one bad link shouldn't blank the rest
+                    except Exception as exc:  # noqa: BLE001 - one bad link shouldn't blank the rest
+                        link_failures += 1
+                        log(f"client '{client_id}': could not resolve a link: {exc}")
                         continue
                     if link.get("type") != "hsm/partition" or not link.get("url"):
                         continue
 
                     partition_id = _partition_id_from_url(link["url"])
                     partition_clients.setdefault(partition_id, []).append(client_id)
+                    resolved_count += 1
     except Exception as exc:  # noqa: BLE001 - re-raised as a distinguished fatal type
         raise FatalHsmError(str(exc)) from exc
+
+    summary = f"clients check complete: {resolved_count} partition link(s) resolved across {len(partition_clients)} partition(s)"
+    if client_failures or link_failures:
+        summary += f" - {client_failures} client(s) and {link_failures} link(s) could not be checked"
+    log(summary)
 
     return partition_clients

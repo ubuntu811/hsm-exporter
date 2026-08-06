@@ -146,10 +146,22 @@ def setup_hsm(name: str):
 
     try:
         with LunaSession(username=ADMIN_USERNAME, password=admin_password, **kwargs) as session:
-            steps = provision_monitor_user(session, monitor_username, monitor_password, kwargs)
+            steps = provision_monitor_user(
+                session,
+                monitor_username,
+                monitor_password,
+                kwargs,
+                on_step=lambda msg: state.log_event(name, msg),
+            )
     except LunaApiError as exc:
+        # Whatever steps DID complete before this were already pushed to the log via
+        # on_step above, even though this exception means `steps` itself never gets
+        # returned - that's the whole point of logging as-it-happens instead of
+        # collecting everything into one list to report only at the very end.
+        state.log_event(name, f"setup failed: {exc}")
         return jsonify({"ok": False, "error": str(exc)}), 502
     except ValueError as exc:
+        state.log_event(name, f"setup refused: {exc}")
         return jsonify({"ok": False, "error": str(exc)}), 400
 
     # The monitor account's credentials just (potentially) changed - refresh promptly

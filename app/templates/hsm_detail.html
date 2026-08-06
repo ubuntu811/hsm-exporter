@@ -119,7 +119,7 @@ async function submitSetup(event, name) {
     });
     var data = await response.json();
     if (response.ok && data.ok) {
-      logLine(name + ': done - ' + data.steps.join('; '), true);
+      logLine(name + ': done\n  - ' + data.steps.join('\n  - '), true);
       form.hidden = true;
     } else {
       logLine(name + ': ' + (data.error || response.statusText), false);

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 from typing import Any
 
 _LOCK = threading.Lock()
 _CACHE: dict[str, dict[str, Any]] = {}
+
+# Rolling per-HSM event log - both poller threads and the setup flow append to this
+# as things happen, rather than a caller batching everything up and only reporting it
+# at the very end (which loses all progress if something fails partway through).
+LOG_MAX_ENTRIES = 200
 
 
 def seed(name: str) -> None:
@@ -32,6 +38,7 @@ def seed(name: str) -> None:
                 "client_problems": [],
                 "clients_thread_status": "starting",
                 "clients_last_checked": None,
+                "log": [],
             },
         )
 
@@ -40,6 +47,19 @@ def update(name: str, fields: dict[str, Any]) -> None:
     with _LOCK:
         entry = _CACHE.setdefault(name, {"name": name})
         entry.update(fields)
+
+
+def log_event(name: str, message: str) -> None:
+    """Append one timestamped entry to this HSM's rolling log. Unlike update() (a
+    whole-field merge), this does its own read-modify-write under the lock, so
+    concurrent appends from different threads (pollers, the setup flow) never lose
+    an entry to a race the way two racing `entry["log"] = entry["log"] + [...]`
+    reads-then-writes could."""
+    with _LOCK:
+        entry = _CACHE.setdefault(name, {"name": name})
+        log = entry.setdefault("log", [])
+        log.append({"timestamp": time.time(), "message": message})
+        del log[:-LOG_MAX_ENTRIES]
 
 
 def get(name: str) -> dict[str, Any] | None:
