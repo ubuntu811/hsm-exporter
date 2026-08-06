@@ -38,6 +38,11 @@ _MONITOR_ACL_LINES = [
     "GET:/api/lunasa/disk",
     "GET:/api/lunasa/network",
     "GET:/api/lunasa/ntls",
+    "GET:/api/lunasa/ntls/clients",
+    # Same "list grants list, not detail" gap as roles above - each client's own `url`
+    # + "/links", and each link's own `url`, need separate grants.
+    "GET:/api/lunasa/ntls/clients/{clientid}/links",
+    "GET:/api/lunasa/ntls/clients/{clientid}/links/{linkid}",
     "POST:/auth/session",
     "DELETE:/auth/session",
     # Framework-enforced self-scoped: a non-admin caller can only target their own userid

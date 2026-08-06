@@ -27,3 +27,15 @@ class LunaClient:
 
     def get_role(self, role_path: str) -> dict[str, Any]:
         return self.session.get_json(role_path)
+
+    def list_ntls_clients(self) -> list[dict[str, Any]]:
+        """Stubs only ("clientID"/"url" per Thales's REST API 15.0.0 reference) -
+        each client's registered partitions come from following its own `url` +
+        "/links", not a flat "partitions" list (that path doesn't exist in v15)."""
+        return self.session.get_json("/api/lunasa/ntls/clients")["clients"]
+
+    def list_client_links(self, client_url: str) -> list[dict[str, Any]]:
+        return self.session.get_json(f"{client_url}/links")["links"]
+
+    def get_link(self, link_path: str) -> dict[str, Any]:
+        return self.session.get_json(link_path)

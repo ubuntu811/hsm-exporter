@@ -11,6 +11,7 @@ from app.monitor import (
     _partition_status,
     _role_kind,
     poll_all,
+    poll_clients_once,
     poll_once,
     role_expectations,
     suggest_partition_config,
@@ -136,6 +137,95 @@ def test_poll_once_reports_role_mismatch_and_partition_fetch_error_as_problems(m
     assert fetch_error["severity"] == "error"
     assert fetch_error["partition"] == "p-broken"
     assert "403 forbidden" in fetch_error["message"]
+
+
+@patch("app.monitor.LunaClient")
+@patch("app.monitor.LunaSession")
+def test_poll_clients_once_maps_partition_ids_to_client_names(mock_session, mock_client):
+    session = mock_session.return_value
+    session.__enter__.return_value = session
+    session.__exit__.return_value = False
+
+    client = mock_client.return_value
+    client.list_ntls_clients.return_value = [
+        {"clientID": "cakey01b.beta.test.swsnet.ch", "url": "/api/lunasa/ntls/clients/cakey01b.beta.test.swsnet.ch"},
+        {"clientID": "laptop.example.com", "url": "/api/lunasa/ntls/clients/laptop.example.com"},
+    ]
+
+    def list_client_links(client_url):
+        if client_url.endswith("cakey01b.beta.test.swsnet.ch"):
+            return [{"id": "1", "url": "/api/lunasa/ntls/clients/cakey01b.beta.test.swsnet.ch/links/1"}]
+        return [{"id": "2", "url": "/api/lunasa/ntls/clients/laptop.example.com/links/2"}]
+
+    def get_link(link_url):
+        if link_url.endswith("/links/1"):
+            return {"type": "hsm/partition", "url": "/api/lunasa/hsms/623780/partitions/1452350716728"}
+        return {"type": "hsm/partition", "url": "/api/lunasa/hsms/623780/partitions/1452350716729"}
+
+    client.list_client_links.side_effect = list_client_links
+    client.get_link.side_effect = get_link
+
+    result = poll_clients_once({"name": "hsm.example"}, {}, "user", "pass")
+
+    assert result == {
+        "1452350716728": ["cakey01b.beta.test.swsnet.ch"],
+        "1452350716729": ["laptop.example.com"],
+    }
+
+
+@patch("app.monitor.LunaClient")
+@patch("app.monitor.LunaSession")
+def test_poll_clients_once_isolates_one_bad_client_and_one_bad_link(mock_session, mock_client):
+    session = mock_session.return_value
+    session.__enter__.return_value = session
+    session.__exit__.return_value = False
+
+    client = mock_client.return_value
+    client.list_ntls_clients.return_value = [
+        {"clientID": "broken-client", "url": "/api/lunasa/ntls/clients/broken-client"},
+        {"clientID": "ok-client", "url": "/api/lunasa/ntls/clients/ok-client"},
+    ]
+
+    def list_client_links(client_url):
+        if "broken-client" in client_url:
+            raise RuntimeError("500 error")
+        return [{"id": "1", "url": "/links/good"}, {"id": "2", "url": "/links/bad"}]
+
+    def get_link(link_url):
+        if link_url == "/links/bad":
+            raise RuntimeError("404 gone")
+        return {"type": "hsm/partition", "url": "/api/lunasa/hsms/1/partitions/p-ok"}
+
+    client.list_client_links.side_effect = list_client_links
+    client.get_link.side_effect = get_link
+
+    # Neither the broken client (its /links call fails) nor the bad link (its detail
+    # fetch fails) should stop the good client/link from being reported.
+    result = poll_clients_once({"name": "hsm.example"}, {}, "user", "pass")
+
+    assert result == {"p-ok": ["ok-client"]}
+
+
+@patch("app.monitor.LunaClient")
+@patch("app.monitor.LunaSession")
+def test_poll_clients_once_raises_fatal_when_listing_clients_fails(mock_session, mock_client):
+    session = mock_session.return_value
+    session.__enter__.return_value = session
+    session.__exit__.return_value = False
+    mock_client.return_value.list_ntls_clients.side_effect = RuntimeError("401 unauthorized")
+
+    with pytest.raises(FatalHsmError, match="401"):
+        poll_clients_once({"name": "hsm.example"}, {}, "user", "pass")
+
+
+@patch("app.monitor.LunaClient")
+@patch("app.monitor.LunaSession")
+def test_poll_clients_once_refuses_a_reserved_username_before_any_network_call(mock_session, mock_client):
+    with pytest.raises(FatalHsmError, match="admin"):
+        poll_clients_once({"name": "hsm.example"}, {}, "admin", "whatever")
+
+    mock_session.assert_not_called()
+    mock_client.assert_not_called()
 
 
 def test_role_expectations_resolves_partition_to_template_case_insensitively():

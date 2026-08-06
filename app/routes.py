@@ -25,18 +25,33 @@ def _back_to(name: str) -> Response:
     return redirect(request.referrer or url_for("web.hsm_detail", name=name))
 
 
-def _with_display_timestamp(hsm: dict[str, Any]) -> dict[str, Any]:
-    ts = hsm.get("last_checked")
-    hsm["last_checked_display"] = (
-        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "never"
-    )
+def _timestamp_display(ts: float | None) -> str:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "never"
+
+
+def _for_display(hsm: dict[str, Any]) -> dict[str, Any]:
+    hsm["last_checked_display"] = _timestamp_display(hsm.get("last_checked"))
+    # Clients poll on a much longer interval (see CLIENTS_POLL_INTERVAL_SECONDS) - worth
+    # being explicit that this can be considerably staler than the roles data above it.
+    hsm["clients_last_checked_display"] = _timestamp_display(hsm.get("clients_last_checked"))
+
+    # role_problems/client_problems are separate cache keys so the two independent
+    # poller threads can't clobber each other's findings (see app/state.py) - combined
+    # into one "problems" view here, the only place anything outside app/poller.py
+    # needs to know that split exists.
+    hsm["problems"] = hsm.get("role_problems", []) + hsm.get("client_problems", [])
+
+    partition_clients = hsm.get("partition_clients", {})
+    for partition in hsm.get("partitions", []):
+        partition["clients"] = partition_clients.get(str(partition.get("id")), [])
+
     return hsm
 
 
 @web.get("/")
 def index():
     hsms = sorted(state.get_all(), key=lambda hsm: hsm["name"])
-    return render_template("index.html", hsms=[_with_display_timestamp(hsm) for hsm in hsms])
+    return render_template("index.html", hsms=[_for_display(hsm) for hsm in hsms])
 
 
 @web.get("/hsms")
@@ -52,7 +67,7 @@ def hsm_detail(name: str):
         abort(404)
     return render_template(
         "hsm_detail.html",
-        hsm=_with_display_timestamp(hsm),
+        hsm=_for_display(hsm),
         monitor_username=os.environ.get("LUNA_USERNAME", ""),
     )
 
@@ -95,7 +110,7 @@ def suggested_partitions(name: str):
 
 @web.get("/api/v1/hsms")
 def api_hsms():
-    return jsonify({"hsms": state.get_all()})
+    return jsonify({"hsms": [_for_display(hsm) for hsm in state.get_all()]})
 
 
 @web.post("/hsms/<name>/setup")

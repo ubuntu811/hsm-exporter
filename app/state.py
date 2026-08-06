@@ -10,7 +10,13 @@ _CACHE: dict[str, dict[str, Any]] = {}
 
 def seed(name: str) -> None:
     """Give an HSM a placeholder entry before its first poll completes, so routes
-    never 404/crash on a name that's configured but hasn't reported in yet."""
+    never 404/crash on a name that's configured but hasn't reported in yet.
+
+    "role_problems"/"client_problems" are separate keys, not one shared "problems"
+    list - the roles poller and clients poller are independent threads that each
+    call update() with only the fields they own, and dict.update() only touches
+    the keys given to it. Sharing one key would let one poller's update silently
+    erase the other's findings. Combined into one "problems" view at read time."""
     with _LOCK:
         _CACHE.setdefault(
             name,
@@ -19,9 +25,13 @@ def seed(name: str) -> None:
                 "id": None,
                 "raw": None,
                 "partitions": [],
-                "problems": [],
+                "role_problems": [],
                 "thread_status": "starting",
                 "last_checked": None,
+                "partition_clients": {},
+                "client_problems": [],
+                "clients_thread_status": "starting",
+                "clients_last_checked": None,
             },
         )
 

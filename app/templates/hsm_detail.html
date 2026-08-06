@@ -34,6 +34,7 @@
   <dl>
     <dt>Serial</dt><dd>{{ hsm.id or '-' }}</dd>
     <dt>Last checked</dt><dd>{{ hsm.last_checked_display }}</dd>
+    <dt>Clients last checked</dt><dd>{{ hsm.clients_last_checked_display }}</dd>
   </dl>
 
   {% if hsm.problems %}
@@ -73,6 +74,7 @@
       </tbody>
     </table>
     {% endif %}
+    <p class="muted">Clients: {{ partition.clients|join(', ') if partition.clients else 'none registered' }}</p>
   </article>
   {% else %}<p>No partitions returned yet.</p>{% endfor %}
 </section>

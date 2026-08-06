@@ -1,7 +1,7 @@
 [project]
-name = "luna-hsm-monitor"
+name = "hsm-exporter"
 version = "0.1.0"
-description = "Small live inventory viewer for Thales Luna HSM appliances"
+description = "Live inventory + Prometheus exporter for Thales Luna HSM appliances"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

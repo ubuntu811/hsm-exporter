@@ -1,16 +1,26 @@
-# Luna HSM Monitor 0.1
+# HSM Exporter 0.1
+
+A live inventory viewer for Thales Luna HSM appliances, on its way to also being a
+Prometheus exporter - meant to sit alongside the other exporters, not be a bespoke
+one-off dashboard.
 
 One deliberately boring architecture:
 
 - `app/luna/`: HTTP only (`session.py` auth/session handling, `client.py` the actual REST calls,
   `provisioning.py` the one-time "create the monitor REST API user" flow)
-- `app/monitor.py`: pure polling logic - `poll_once()`/`poll_all()`, config-vs-actual CU/CO role
-  diffing, no I/O beyond the Luna calls themselves
-- `app/poller.py`: one background thread per configured HSM, calling `poll_once()` on a timer
-  (~60s). Stops itself on a fatal (connection/auth) failure instead of retrying a struggling
-  appliance forever - resume via the UI's "check now" (which doubles as "resume")
-- `app/state.py`: the one shared cache (in-memory, lock-guarded) poller threads write into and
-  Flask routes read from - no second polling path for the web UI vs. anything else that reads it
+- `app/monitor.py`: pure polling logic - `poll_once()`/`poll_all()` (config-vs-actual CU/CO role
+  diffing) and `poll_clients_once()` (NTLS client-to-partition mapping) - no I/O beyond the Luna
+  calls themselves
+- `app/poller.py`: **two** independent background threads per configured HSM - `RolesPoller`
+  (~60s, the login-state signal) and `ClientsPoller` (~10min, much larger fan-out, changes rarely).
+  Each stops itself on a fatal (connection/auth) failure instead of retrying a struggling appliance
+  forever; `HsmMonitor` gives the UI one start/stop/check-now surface that controls both while
+  keeping them isolated from each other underneath (a stuck client fan-out never delays the
+  roles poll, and vice versa)
+- `app/state.py`: the one shared cache (in-memory, lock-guarded) both pollers write into and Flask
+  routes read from. The two pollers write to separate keys (`role_problems`/`client_problems`,
+  etc.) so one can never clobber the other's findings via `state.update()`'s dict-merge semantics -
+  routes.py combines them into one `problems` view at read time
 - `app/routes.py`: thin Flask layer - an HSM overview page, a per-HSM detail page, start/stop/
   check-now controls, and the setup flow
 - `app/templates/`: HTML

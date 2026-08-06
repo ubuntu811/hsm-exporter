@@ -263,3 +263,65 @@ def poll_all(config: dict[str, Any]) -> list[dict[str, Any]]:
         results.append(result)
 
     return results
+
+
+def _partition_id_from_url(url: str) -> str:
+    return url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def poll_clients_once(
+    entry: dict[str, Any],
+    global_config: dict[str, Any],
+    username: str,
+    password: str,
+) -> dict[str, list[str]]:
+    """One poll of one HSM's NTLS client registrations, returning {partition_id:
+    [client_names]}. Raises FatalHsmError on connection/auth failure, same contract
+    as poll_once(). One bad client or link is skipped, not fatal - mirrors
+    _partition_status()'s "one bad thing doesn't blank the whole result" rule.
+
+    Deliberately does NOT resolve the partition detail (name/label) the way the old
+    nautobot plugin did - it already has the full partition list (with ids) from
+    poll_once() in the same app, so it only needs the partition *id* out of each
+    link, matched against that list at render time. Saves a network call per link
+    and avoids depending on an unverified field name on that detail object."""
+    if username in RESERVED_USERNAMES:
+        raise FatalHsmError(
+            f"LUNA_USERNAME is '{username}', one of the appliance's built-in roles "
+            f"({', '.join(sorted(RESERVED_USERNAMES))}) - refusing to use it for monitoring"
+        )
+
+    try:
+        with LunaSession(username=username, password=password, **session_kwargs(entry, global_config)) as session:
+            client = LunaClient(session)
+            clients = client.list_ntls_clients()
+
+            partition_clients: dict[str, list[str]] = {}
+            for stub in clients:
+                client_id = stub.get("clientID")
+                client_url = stub.get("url")
+                if not client_id or not client_url:
+                    continue
+
+                try:
+                    links = client.list_client_links(client_url)
+                except Exception:  # noqa: BLE001 - one bad client shouldn't blank the rest
+                    continue
+
+                for link_stub in links:
+                    link_url = link_stub.get("url")
+                    if not link_url:
+                        continue
+                    try:
+                        link = client.get_link(link_url)
+                    except Exception:  # noqa: BLE001 - one bad link shouldn't blank the rest
+                        continue
+                    if link.get("type") != "hsm/partition" or not link.get("url"):
+                        continue
+
+                    partition_id = _partition_id_from_url(link["url"])
+                    partition_clients.setdefault(partition_id, []).append(client_id)
+    except Exception as exc:  # noqa: BLE001 - re-raised as a distinguished fatal type
+        raise FatalHsmError(str(exc)) from exc
+
+    return partition_clients

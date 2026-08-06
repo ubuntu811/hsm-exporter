@@ -9,7 +9,7 @@ chmod 0755 "${CONFIG_DIR}"
 chmod 0644 "${CONFIG_DIR}/hsms.yml"
 
 podman run --rm \
-    --name luna-hsm-monitor \
+    --name hsm-exporter \
     --env-file .env \
     -p 8080:8080 \
     -v "${CONFIG_DIR}:/config:ro,Z" \
