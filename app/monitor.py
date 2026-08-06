@@ -212,7 +212,12 @@ def poll_once(
         )
 
     try:
-        with LunaSession(username=username, password=password, **session_kwargs(entry, global_config)) as session:
+        with LunaSession(
+            username=username,
+            password=password,
+            on_error=on_event,
+            **session_kwargs(entry, global_config),
+        ) as session:
             client = LunaClient(session)
             hsm = client.get_hsm()
             hsm_id = hsm.get("id")
@@ -309,7 +314,12 @@ def poll_clients_once(
         )
 
     try:
-        with LunaSession(username=username, password=password, **session_kwargs(entry, global_config)) as session:
+        with LunaSession(
+            username=username,
+            password=password,
+            on_error=on_event,
+            **session_kwargs(entry, global_config),
+        ) as session:
             client = LunaClient(session)
             clients = client.list_ntls_clients()
             log(f"found {len(clients)} registered client(s)")
@@ -325,11 +335,13 @@ def poll_clients_once(
                 if not client_id or not client_url:
                     continue
 
+                # Failures here are already reported via on_error (the session logs
+                # every failing call with its exact URL/status/body) - just tally them
+                # for the summary line below, no need to also restate each one.
                 try:
                     links = client.list_client_links(client_url)
-                except Exception as exc:  # noqa: BLE001 - one bad client shouldn't blank the rest
+                except Exception:  # noqa: BLE001 - one bad client shouldn't blank the rest
                     client_failures += 1
-                    log(f"client '{client_id}': could not list links: {exc}")
                     continue
 
                 for link_stub in links:
@@ -338,9 +350,8 @@ def poll_clients_once(
                         continue
                     try:
                         link = client.get_link(link_url)
-                    except Exception as exc:  # noqa: BLE001 - one bad link shouldn't blank the rest
+                    except Exception:  # noqa: BLE001 - one bad link shouldn't blank the rest
                         link_failures += 1
-                        log(f"client '{client_id}': could not resolve a link: {exc}")
                         continue
                     if link.get("type") != "hsm/partition" or not link.get("url"):
                         continue

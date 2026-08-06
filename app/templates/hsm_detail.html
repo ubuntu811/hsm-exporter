@@ -81,7 +81,13 @@
 
 <section class="card">
   <h3>Log</h3>
-  <div id="log" class="log"><p class="log-empty">No actions yet.</p></div>
+  <div id="log" class="log">
+    {% for entry in hsm.log %}
+    <div class="log-line">[{{ entry.time }}] {{ entry.message }}</div>
+    {% else %}
+    <p class="log-empty">No actions yet.</p>
+    {% endfor %}
+  </div>
 </section>
 
 <script>

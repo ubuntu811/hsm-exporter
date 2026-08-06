@@ -27,7 +27,7 @@ def fake_roles_poller(monkeypatch):
     calls = []
     should_fail = {"value": False}
 
-    def fake_poll_once(entry, global_config, expectations, username, password):
+    def fake_poll_once(entry, global_config, expectations, username, password, on_event=None):
         calls.append(time.monotonic())
         if should_fail["value"]:
             raise FatalHsmError("simulated connection failure")
@@ -106,7 +106,7 @@ def fake_clients_poller(monkeypatch):
     calls = []
     should_fail = {"value": False}
 
-    def fake_poll_clients_once(entry, global_config, username, password):
+    def fake_poll_clients_once(entry, global_config, username, password, on_event=None):
         calls.append(time.monotonic())
         if should_fail["value"]:
             raise FatalHsmError("simulated connection failure")
@@ -147,11 +147,11 @@ def test_hsm_monitor_start_stop_check_now_control_both_pollers(monkeypatch):
     roles_calls = []
     clients_calls = []
 
-    def fake_poll_once(entry, global_config, expectations, username, password):
+    def fake_poll_once(entry, global_config, expectations, username, password, on_event=None):
         roles_calls.append(1)
         return {"name": entry["name"], "id": "42", "raw": {}, "partitions": [], "problems": []}
 
-    def fake_poll_clients_once(entry, global_config, username, password):
+    def fake_poll_clients_once(entry, global_config, username, password, on_event=None):
         clients_calls.append(1)
         return {}
 
@@ -180,10 +180,10 @@ def test_one_poller_going_fatal_does_not_affect_the_other(monkeypatch):
     # Regression guard: role_problems/client_problems must be separate cache keys -
     # if they shared one "problems" key, one poller's state.update() would silently
     # erase whatever the other poller had just written.
-    def fake_poll_once(entry, global_config, expectations, username, password):
+    def fake_poll_once(entry, global_config, expectations, username, password, on_event=None):
         return {"name": entry["name"], "id": "42", "raw": {}, "partitions": [], "problems": [{"kind": "role_mismatch"}]}
 
-    def fake_poll_clients_once(entry, global_config, username, password):
+    def fake_poll_clients_once(entry, global_config, username, password, on_event=None):
         raise FatalHsmError("clients side failure")
 
     monkeypatch.setattr("app.poller.poll_once", fake_poll_once)

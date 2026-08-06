@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import requests
 import urllib3
@@ -26,11 +26,16 @@ class LunaSession:
         verify: bool | str = False,
         timeout: float = 10.0,
         api_version: int = 15,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.verify = verify
         self.timeout = timeout
         self.api_version = api_version
+        # Called with a human-readable message for every failing call this session
+        # makes (non-2xx response or a connection failure) - one hook point instead
+        # of every caller having to remember to log its own failures by hand.
+        self.on_error = on_error
 
         self.headers = {
             "Content-Type": (
@@ -100,17 +105,23 @@ class LunaSession:
             )
         except requests.RequestException as exc:
             logger.warning("%s %s failed: %s", method.upper(), url, exc)
-            raise LunaApiError(
-                f"{method.upper()} {url}: {exc}"
-            ) from exc
+            message = f"{method.upper()} {url}: {exc}"
+            if self.on_error is not None:
+                self.on_error(message)
+            raise LunaApiError(message) from exc
 
         logger.info("%s %s -> %s", method.upper(), url, response.status_code)
 
         if response.status_code not in expected_status_codes:
-            raise LunaApiError(
+            message = (
                 f"{method.upper()} {url}: expected HTTP "
                 f"{expected_status_codes}, got {response.status_code}: "
-                f"{response.content!r}",
+                f"{response.content!r}"
+            )
+            if self.on_error is not None:
+                self.on_error(message)
+            raise LunaApiError(
+                message,
                 status_code=response.status_code,
                 response_body=response.text,
             )

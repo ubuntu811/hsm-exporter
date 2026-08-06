@@ -58,6 +58,18 @@ _MONITOR_ACL_LINES = [
 MONITOR_ROLE_ACL = "\n".join(_MONITOR_ACL_LINES)
 
 
+def get_role_acl(admin_session: LunaSession, username: str) -> str:
+    """Read back the ACL actually stored on the appliance for this role, rather than
+    trusting that a successful PUT means it took - the mismatch between "we sent it"
+    and "it's actually active" is exactly what's in question when the ACL keeps
+    getting rewritten but the resulting 401s never change."""
+    response = admin_session.get(
+        f"/roles/{username}/resources",
+        headers={"Accept": "application/octet-stream"},
+    )
+    return response.text
+
+
 def _user_payload(username: str, password: str) -> str:
     return json.dumps(
         {
@@ -124,6 +136,16 @@ def provision_monitor_user(
     )
     record(f"applied ACL to role '{username}'")
 
+    try:
+        live_acl = get_role_acl(admin_session, username)
+    except Exception as exc:  # noqa: BLE001 - diagnostic only, must not break provisioning
+        record(f"could not read back the role's ACL to verify: {exc}")
+    else:
+        if live_acl.strip() == MONITOR_ROLE_ACL.strip():
+            record(f"read back ACL for role '{username}' - matches what was just sent")
+        else:
+            record(f"read back ACL for role '{username}' - DOES NOT MATCH what was sent:\n{live_acl}")
+
     users = admin_session.get_json("/users").get("users", [])
     user_exists = any(user.get("id") == username for user in users)
 
@@ -135,7 +157,7 @@ def provision_monitor_user(
     admin_session.post("/users", payload=_user_payload(username, temp_password), expected_status_codes=(204,))
     record(f"created user '{username}' with a temporary password")
 
-    with LunaSession(username=username, password=temp_password, **session_kwargs) as self_session:
+    with LunaSession(username=username, password=temp_password, on_error=on_step, **session_kwargs) as self_session:
         self_session.post(
             f"/users/{username}/actions/changePassword",
             payload=json.dumps({"currentPassword": temp_password, "password": final_password}),

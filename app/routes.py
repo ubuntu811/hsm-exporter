@@ -45,6 +45,13 @@ def _for_display(hsm: dict[str, Any]) -> dict[str, Any]:
     for partition in hsm.get("partitions", []):
         partition["clients"] = partition_clients.get(str(partition.get("id")), [])
 
+    # Newest first, matching how the setup flow's JS prepends its own live entries -
+    # a page reload should read the same direction as what was already on screen.
+    hsm["log"] = [
+        {"time": datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S"), "message": entry["message"]}
+        for entry in reversed(hsm.get("log", []))
+    ]
+
     return hsm
 
 
@@ -144,14 +151,17 @@ def setup_hsm(name: str):
     global_config = config.get("global", {})
     kwargs = luna_session_kwargs(entry, global_config)
 
+    def log_it(message: str) -> None:
+        state.log_event(name, message)
+
     try:
-        with LunaSession(username=ADMIN_USERNAME, password=admin_password, **kwargs) as session:
+        with LunaSession(username=ADMIN_USERNAME, password=admin_password, on_error=log_it, **kwargs) as session:
             steps = provision_monitor_user(
                 session,
                 monitor_username,
                 monitor_password,
                 kwargs,
-                on_step=lambda msg: state.log_event(name, msg),
+                on_step=log_it,
             )
     except LunaApiError as exc:
         # Whatever steps DID complete before this were already pushed to the log via
